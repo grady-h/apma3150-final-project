@@ -1,0 +1,46 @@
+---
+title: "Final Project: CYP-GUIDES Trial"
+author: "Thomas Chia, Eugene Choo, and Grady Hollar"
+date: 'Due: Fri July 12 | 1:40pm'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+editor_options: 
+  markdown:
+    wrap: 72
+---
+
+**APMA 3150 \| Summer 2024 \| University of Virginia\
+*"On our honor, we pledge that we have neither given nor received help
+on this assignment." - \_\_, \_\_, Grady Hollar.***
+
+------------------------------------------------------------------------
+
+### Data Initialization
+
+```{r}
+data <- read.csv("data/Dataset.csv")
+medication_key <- read.csv("data/Medicationkey.csv")
+```
+
+------------------------------------------------------------------------
+
+### ANOVA
+
+------------------------------------------------------------------------
+
+### Multivariate Regression Analysis
+
+------------------------------------------------------------------------
+
+### Survival Analysis
+
+------------------------------------------------------------------------
+
+### Paired T-Test
+
+------------------------------------------------------------------------
+
+### Propensity Score Matching
