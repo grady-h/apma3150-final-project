@@ -17,11 +17,15 @@ editor_options:
 on this assignment." - Thomas Chia, \_\_, Grady Hollar.***
 
 ------------------------------------------------------------------------
+
 ### Global Package Imports
 
 ```{r}
 library(tidyverse)
 library(car)
+library(data.table)
+library(gridExtra)
+library(corrplot)
 ```
 
 ### Data Initialization
@@ -42,7 +46,7 @@ print(colnames(medication_key))
 
 ------------------------------------------------------------------------
 
-### ANOVA: Determining if assignment, gender, or ethnicity impacts the length of stay (LOS).
+## ANOVA
 
 ```{r}
 data$GENDER <- as.factor(data$GENDER)
@@ -54,7 +58,12 @@ data$`Therapeutic.Guidances` <- as.factor(data$`Therapeutic.Guidances`)
 anova_model <- aov(LOS ~ Assignment + GENDER + `RACE.ETHNICITY`, data = data)
 summary(anova_model)
 ```
-**Understanding the results:** The Assignment variable has a P-value of 0.825 which is significantly higher than our $\alpha$ of 0.05. Therefore it does not impact the length of stay. However, gender and ethnicity both have statistically significant P-values, indicating that these variables indeed do have an impact on the length of stay.
+
+**Understanding the results:** The Assignment variable has a P-value of
+0.825 which is significantly higher than our $\alpha$ of 0.05. Therefore
+it does not impact the length of stay. However, gender and ethnicity
+both have statistically significant P-values, indicating that these
+variables indeed do have an impact on the length of stay.
 
 ```{r}
 # Boxplots
@@ -75,16 +84,305 @@ boxplot(LOS ~ RACE.ETHNICITY, data = data, main = "LOS by RACE.ETHNICITY",
 
 ------------------------------------------------------------------------
 
-### Multivariate Regression Analysis
+## Regression Analysis
+
+### Setup
+
+Reset the data
+
+```{r}
+data <- read.csv("data/Dataset.csv")
+medication_key <- read.csv("data/Medicationkey.csv")
+```
+
+We start by converting the relevant columns into factors and changing
+the medicine counts to indicator variables.
+
+```{r}
+# convert categorical variables to factors
+data$GENDER <- as.factor(data$GENDER)
+levels(data$GENDER) <- c("Female", "Male")
+data$RACE.ETHNICITY <- as.factor(data$RACE.ETHNICITY)
+levels(data$RACE.ETHNICITY) <- c("Black", "Latino", "Other/Unspecified", "White")
+diagnosis_factor <- as.factor(data$Diagnosis)
+data$Diagnosis <- diagnosis_factor
+data$MD <- as.factor(data$MD)
+data$Assignment <- as.factor(data$Assignment)
+data$EMR <- as.factor(data$EMR)
+data$Therapeutic.Guidances <- as.factor(data$Therapeutic.Guidances)
+
+
+# change medicines to indicator variables rather than total counts (yes/no did recieve this medicine during hospital stay)
+for (i in seq(0:29)) {
+  data[i+10] <- as.numeric(data[i+10] > 0)
+}
+```
+
+We aim to analyze the data by performing linear regressions to predict
+the length of stay of a patient. We take two different approaches.
+First, by considering the entire data set, and secondly by isolating the
+most common diagnosis(es) and analyzing them separately. The reason we
+do this is to try and account for the differences in length of stay
+across different diagnoses, as can be seen in the plot below.
+
+```{r}
+ggplot(data, aes(x=Diagnosis, y=LOS))+
+  geom_boxplot()+
+  scale_x_discrete(labels=seq(1:32))
+```
+
+Before performing the regression, we examine the distribution of the
+response variable.
+
+```{r}
+ggplot(data, aes(x=LOS))+
+  geom_histogram(color="black", fill="#5e94ad")+
+  labs(x="Length of Stay (days)", y="Frequency")
+```
+
+We see that the data is heavily skewed. To account for this, we perform
+a log transformation on the data.
+
+```{r}
+data$LOS <- log(data$LOS)
+```
+
+Next, we need to actually find the most common diagnoses.
+
+```{r}
+ggplot(data, aes(x=Diagnosis))+
+  geom_bar(color="black", fill="#5e94ad")+
+  scale_x_discrete(labels=seq(1:32))
+```
+
+Using the above we collapse the data into the four most common
+diagnoses, 21, 7,21 and 28.
+
+```{r}
+# get the top 4 most common diagnosis
+diagnosis_A <- levels(diagnosis_factor)[21]
+diagnosis_B <- levels(diagnosis_factor)[7]
+diagnosis_C <- levels(diagnosis_factor)[22]
+diagnosis_D <- levels(diagnosis_factor)[28]
+
+diagnosis_A; diagnosis_B; diagnosis_C; diagnosis_D
+
+data_A <- data[data$Diagnosis==diagnosis_A,]
+data_B <- data[data$Diagnosis==diagnosis_B,]
+data_C <- data[data$Diagnosis==diagnosis_C,]
+data_D <- data[data$Diagnosis==diagnosis_D,]
+
+# combine all 4 into a single data frame, for use later
+diagnoses_combined <- data[data$Diagnosis==diagnosis_A | data$Diagnosis==diagnosis_B | data$Diagnosis==diagnosis_C | data$Diagnosis==diagnosis_D,]
+```
+
+### LOS Modeled on Diagnosis and Treatment Plan
+
+We start by trying a model based on a patient's diagnosis and treatment
+plan. We use backwards elimination examining $R^2$ in an attempt to
+prune the model. First, we start with the entire data set.
+
+```{r}
+# level 1
+los_vs_treatment_init <- lm(LOS ~ Diagnosis + Assignment + Therapeutic.Guidances, data=data)
+summary(los_vs_treatment_init)$adj.r.squared
+
+# level 2
+print("level 2")
+los_vs_treatment_l2A <- lm(LOS ~ Diagnosis + Assignment, data=data)
+summary(los_vs_treatment_l2A)$adj.r.squared # winning model
+los_vs_treatment_l2B <- lm(LOS ~ Diagnosis +Therapeutic.Guidances, data=data)
+summary(los_vs_treatment_l2B)$adj.r.squared
+los_vs_treatment_l2C <- lm(LOS ~ Assignment + Therapeutic.Guidances, data=data)
+summary(los_vs_treatment_l2C)$adj.r.squared
+
+# level 3
+print("level 3")
+los_vs_treatment_l3A <- lm(LOS ~ Assignment, data=data)
+summary(los_vs_treatment_l3A)$adj.r.squared
+los_vs_treatment_l3B <- lm(LOS ~ Diagnosis, data=data)
+summary(los_vs_treatment_l3B)$adj.r.squared
+
+# winning model
+print("winning model:")
+summary(los_vs_treatment_l3B)
+```
+
+Now we do the same but only within the most common diagnosis, MDD,
+Recurrent, Severe Without Psychotic Features. Obviously, we remove
+`Diagnosis` from the model.
+
+```{r}
+# level 1
+los_vs_treatmentA_init <- lm(LOS ~ Assignment + Therapeutic.Guidances, data=data_A)
+summary(los_vs_treatment_init)$adj.r.squared
+
+# level 2
+print("level 2")
+los_vs_treatmentA_l2A <- lm(LOS ~ Assignment, data=data_A)
+summary(los_vs_treatmentA_l2A)$adj.r.squared
+los_vs_treatmentA_l2B <- lm(LOS ~ Therapeutic.Guidances, data=data_A)
+summary(los_vs_treatmentA_l2B)$adj.r.squared 
+
+# no improvement at level 2
+
+print("winning model:")
+summary(los_vs_treatmentA_init)
+```
+
+### LOS Modeled on Demographics
+
+In the ANOVA test, we saw that race and gender both had significant
+affects on the length of stay. Let's investigate this further by
+performing the same process as above in an attempt to fit a regression
+model based on patient demographics. Again, we start with the entire
+data set.
+
+```{r}
+# level 1
+los_fit_l1 <- lm(LOS ~ GENDER + AGE + RACE.ETHNICITY, data=data)
+summary(los_fit_l1)$adj.r.squared
+
+# level 2
+print("level 2")
+los_fit_l2_A <- lm(LOS ~ GENDER + AGE , data=data)
+summary(los_fit_l2_A)$adj.r.squared
+los_fit_l2_B <- lm(LOS ~ GENDER + RACE.ETHNICITY, data=data)
+summary(los_fit_l2_B)$adj.r.squared
+los_fit_l2_C <- lm(LOS ~ AGE + RACE.ETHNICITY, data=data)
+summary(los_fit_l2_C)$adj.r.squared
+
+# no improvement at level 2
+
+# winning model
+print("winning model:")
+summary(los_fit_l1)
+```
+
+Now within just the most common diagnosis.
+
+```{r}
+# level 1
+los_vs_demographicsA_init <- lm(LOS ~ GENDER + AGE + RACE.ETHNICITY, data=data_A)
+summary(los_vs_demographicsA_init)$adj.r.squared
+
+# level 2
+print("level 2")
+los_vs_demographicsA_l2A <- lm(LOS ~ GENDER + AGE, data=data_A)
+summary(los_vs_demographicsA_l2A)$adj.r.squared
+los_vs_demographicsA_l2B <- lm(LOS ~ GENDER + RACE.ETHNICITY, data=data_A)
+summary(los_vs_demographicsA_l2B)$adj.r.squared
+los_vs_demographicsA_l2C <- lm(LOS ~ AGE + RACE.ETHNICITY, data=data_A)
+summary(los_vs_demographicsA_l2C)$adj.r.squared
+
+# no improvement at level 2
+
+# winning model
+summary(los_vs_demographicsA_init)
+```
+
+### Understanding the Results
+
+Unfortunately, all of our regression models resulted in extremely low
+$R^2$ values, meaning none of the models hold any meaningful predictive
+power—even with a logarithmic transform and an attempt to hone in on a
+single diagnosis. We conclude that there is simply no linear
+relationship between the length of stay and the predictors.
+
+However, although the models themselves are not predictive in nature, we
+do see that some of the generated coefficients are significant. In the
+diagnosis/treatment model on the entire data set, both "MDD, recurrent
+episodes" and "Unspecified Depressive Disorder" had positive
+coefficients that were significant at the 0.05 level. Furthermore, in
+the demographic models, the "Male", "AGE", and "White" all have positive
+significant coefficients. Though the relationships might not be linear,
+the significance of the coefficients suggest there may be a positive
+relationship between length of stay and these two diagnoses and three
+demographics.
+
+### More Failed Tests
+
+Can mention in sideshow if space/time provides. Can easily skip over if
+wanted.
+
+#### Simple Linear Regression Between LOS and Age
+
+First the entire dataset.
+
+```{r}
+los_age_lm <- lm(LOS ~ AGE, data=data)
+summary(los_age_lm)
+
+ggplot(data, aes(x=AGE, y=log(LOS),))+
+  geom_point()+
+  geom_smooth(method=lm, se=FALSE)
+```
+
+Now we look at the top 4 most common diagnoses separately.
+
+```{r}
+los_age_lmA <- lm(LOS ~ AGE, data=data_A)
+summary(los_age_lmA)$coefficients
+summary(los_age_lmA)$r.squared
+
+los_age_lmB <- lm(LOS ~ AGE, data=data_B)
+summary(los_age_lmB)$coefficients
+summary(los_age_lmB)$r.squared
+
+los_age_lmC <- lm(LOS ~ AGE, data=data_C)
+summary(los_age_lmC)$coefficients
+summary(los_age_lmC)$r.squared
+
+los_age_lmD <- lm(LOS ~ AGE, data=data_D)
+summary(los_age_lmD)$coefficients
+summary(los_age_lmD)$r.squared
+
+ggplot(diagnoses_combined, aes(x=AGE, y=log(LOS), color=Diagnosis))+
+  geom_point()+
+  geom_smooth(method=lm, se=FALSE)
+```
+
+Again, terrible $R^2$ values, but significant coefficients. Once again
+suggesting a non-linear relationship between the variables.
+
+#### Logistic Regression on RAR
+
+We investigate the readmission rate, performing a logistic regression
+based off of the patients' diagnoses and treatment plans. Start by
+splitting the data.
+
+```{r}
+# 80:20 train:test split ratio
+train_split <- data[1:1200,]
+test_split <- data[1201:1500,]
+```
+
+Now we build the model and perform predictions.
+
+```{r}
+rar_treatment_glm <- glm(RAR ~ Diagnosis + Assignment + Therapeutic.Guidances, data=data)
+rar_pred <- as.numeric(predict(rar_treatment_glm, test_split, type="response") > 0.3)
+conf_matrix <- table(Predicted = rar_pred, Actual = test_split$RAR)
+conf_matrix
+```
+
+Lets also try a model based off of patient demographics
+
+```{r}
+rar_demographic_glm <- glm(RAR ~ GENDER + AGE + RACE.ETHNICITY, data=data)
+rar_pred <- as.numeric(predict(rar_demographic_glm, test_split, type="response") > 0.3)
+conf_matrix <- table(Predicted = rar_pred, Actual = test_split$RAR)
+conf_matrix
+```
+
+Both models always predict no readmission for every single patient, even
+with a threshold value of 0.3. The models, once again, have little to no
+predictive power.
 
 ------------------------------------------------------------------------
 
-### Survival Analysis
+## Paired T-Test
 
 ------------------------------------------------------------------------
 
-### Paired T-Test
-
-------------------------------------------------------------------------
-
-### Propensity Score Matching
+## Propensity Score Matching
